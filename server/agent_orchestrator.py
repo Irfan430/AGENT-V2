@@ -1,6 +1,7 @@
 """
 Production-grade agent orchestrator implementing the agentic loop.
 Manages the Thought-Action-Observation-Reflection workflow with real tool execution.
+Implements Phase 3.1 and 3.2 of the Production Roadmap.
 """
 
 import logging
@@ -18,6 +19,7 @@ from server.agent_state import (
 from server.llm_client import get_llm_client, Message
 from server.agent_config import get_system_prompt, AgentStateConfig
 from server.tool_manager import get_tool_manager
+from server.error_handler import ErrorHandler, SelfCorrectionEngine, ErrorType, RecoveryStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +33,10 @@ class AgentOrchestrator:
         """Initialize the orchestrator."""
         self.llm_manager = get_llm_client()
         self.tool_manager = get_tool_manager()
+        self.error_handler = ErrorHandler()
+        self.self_correction_engine = SelfCorrectionEngine(self.error_handler)
         self.config = AgentStateConfig()
-        logger.info("Production Agent orchestrator initialized")
+        logger.info("Production Agent orchestrator initialized with self-correction")
     
     async def run_agent_loop(
         self,
@@ -74,8 +78,34 @@ class AgentOrchestrator:
                 state = await self._observation_phase(state)
                 
                 # Phase 4: Reflection - Reflect on the results if errors occur
-                if self.config.enable_reflection and state.error_count >= self.config.reflection_threshold:
-                    state = await self._reflection_phase(state)
+                if state.error_count > 0 and self.config.enable_reflection:
+                    # Attempt self-correction if there are errors
+                    last_observation = state.observations[-1] if state.observations else None
+                    if last_observation and not last_observation.success:
+                        error_context = {
+                            "user_message": state.user_message,
+                            "last_action": state.actions[-1].dict() if state.actions else None,
+                            "last_observation": last_observation.dict()
+                        }
+                        classified_error = self.error_handler.classify_error(Exception(last_observation.error), error_context)
+                        
+                        correction_attempted, correction_message = await self.self_correction_engine.attempt_correction(
+                            error=Exception(last_observation.error),
+                            context=error_context,
+                            retry_callback=self._retry_last_action # This is a placeholder, actual retry logic needs to be more sophisticated
+                        )
+                        
+                        if correction_attempted:
+                            logger.info(f"Self-correction attempted: {correction_message}")
+                            # After correction, agent should re-think or retry
+                            # For now, we'll just log and let the loop continue
+                            state.context["last_correction_message"] = correction_message
+                            state.error_count = 0 # Reset error count after correction attempt
+                        else:
+                            logger.warning("Self-correction failed or not applicable.")
+                            state = await self._reflection_phase(state) # Fallback to LLM reflection
+                    else:
+                        state = await self._reflection_phase(state) # Fallback to LLM reflection
                 
                 # Check termination conditions
                 if self._should_terminate(state):
@@ -91,7 +121,7 @@ class AgentOrchestrator:
                 })
                 state.error_count += 1
                 
-                if state.error_count >= 5: # Increased tolerance for production
+                if state.error_count >= self.config.max_consecutive_errors: # Use config for max errors
                     state.response = f"Agent encountered too many critical errors: {str(e)}"
                     state.success = False
                     break
@@ -120,7 +150,8 @@ class AgentOrchestrator:
                     obs = state.observations[i] if i < len(state.observations) else None
                     history_context += f"Action {i+1}: {action.type} - {action.description}\n"
                     if obs:
-                        history_context += f"Observation {i+1}: {'Success' if obs.success else 'Failure'} - {obs.result[:500]}...\n"
+                        obs_status = "Success" if obs.success else "Failure"
+                    history_context += f"Observation {i+1}: {obs_status} - {obs.result[:500]}...\n"
 
             thinking_prompt = f"""Analyze the task and decide the next step.
 
@@ -130,6 +161,8 @@ Current Iteration: {state.iteration}/{state.max_iterations}
 
 Available Tools:
 {json.dumps(available_tools, indent=2)}
+
+{state.context.get("last_correction_message", "")}
 
 Please provide your response in JSON format:
 {{
@@ -343,13 +376,34 @@ Provide a reflection on the situation and a new strategy."""
             return state
 
     def _should_terminate(self, state: AgentState) -> bool:
-        """Check if the agent loop should terminate."""
+        """
+        Check if the agent loop should terminate.
+        Includes conditions for max iterations and max consecutive errors.
+        """
         if state.response:
             return True
         if state.iteration >= state.max_iterations:
             state.response = "Maximum iterations reached without a final answer."
             return True
+        if state.error_count >= self.config.max_consecutive_errors:
+            state.response = f"Terminating due to {state.error_count} consecutive errors."
+            state.success = False
+            return True
         return False
+
+    async def _retry_last_action(self, state: AgentState) -> Dict[str, Any]:
+        """Helper to retry the last action (for self-correction)."""
+        if not state.actions:
+            return {"success": False, "error": "No previous action to retry"}
+        
+        last_action = state.actions[-1]
+        if last_action.type == ActionType.TOOL_CALL:
+            tool_name = state.thought.next_action # Assuming thought is still valid
+            tool_input = last_action.input or {}
+            logger.info(f"Retrying last action: {tool_name} with input {tool_input}")
+            return await self.tool_manager.execute_tool(tool_name, tool_input, user_approved=True)
+        else:
+            return {"success": False, "error": "Last action was not a tool call, cannot retry"}
 
 # Global orchestrator instance
 _orchestrator: Optional[AgentOrchestrator] = None

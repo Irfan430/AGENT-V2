@@ -71,6 +71,7 @@ class AgentStateConfig:
     # Reflection settings
     enable_reflection: bool = True
     reflection_threshold: int = 2  # Number of errors before triggering reflection
+    max_consecutive_errors: int = 5  # Maximum consecutive errors before aborting
     
     # Context compression
     enable_context_compression: bool = True
