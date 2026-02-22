@@ -1,14 +1,14 @@
 """
-DeepSeek API client for language model interactions.
-Handles API calls, streaming, and error handling.
+Multi-LLM API client for language model interactions.
+Supports DeepSeek, OpenAI, Gemini, and custom OpenAI-compatible APIs.
 """
 
 import os
 import asyncio
-from typing import Optional, List, Dict, Any, AsyncGenerator
+import logging
+from typing import Optional, List, Dict, Any, AsyncGenerator, Union
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -22,99 +22,29 @@ class LLMResponse(BaseModel):
     content: str
     finish_reason: str
     usage: Optional[Dict[str, int]] = None
+    provider: str
 
-class DeepSeekClient:
-    """
-    Client for interacting with DeepSeek API.
-    Provides both sync and async methods for LLM calls.
-    """
+class BaseLLMClient:
+    """Base class for LLM clients."""
+    async def chat_completion_async(self, messages: List[Message], **kwargs) -> LLMResponse:
+        raise NotImplementedError
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "deepseek-chat"):
-        """
-        Initialize the DeepSeek client.
-        
-        Args:
-            api_key: DeepSeek API key. If not provided, reads from LLM_API_KEY env var.
-            model: Model name to use (default: deepseek-chat)
-        """
-        self.api_key = api_key or os.getenv("LLM_API_KEY")
-        if not self.api_key:
-            raise ValueError("DeepSeek API key not found. Set LLM_API_KEY environment variable.")
-        
+    async def stream_chat_completion(self, messages: List[Message], **kwargs) -> AsyncGenerator[str, None]:
+        raise NotImplementedError
+
+class OpenAICompatibleClient(BaseLLMClient):
+    """Client for OpenAI-compatible APIs (DeepSeek, OpenAI, etc.)"""
+    
+    def __init__(self, api_key: str, base_url: str, model: str, provider: str):
+        self.api_key = api_key
+        self.base_url = base_url
         self.model = model
-        self.base_url = "https://api.deepseek.com"
+        self.provider = provider
         
-        # Initialize both sync and async clients
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
-        self.async_client = AsyncOpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
-        
-        logger.info(f"DeepSeek client initialized with model: {self.model}")
-    
-    def chat_completion(
-        self,
-        messages: List[Message],
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        top_p: float = 0.95,
-        stream: bool = False
-    ) -> LLMResponse:
-        """
-        Synchronous chat completion request.
-        
-        Args:
-            messages: List of messages in conversation
-            temperature: Sampling temperature (0-2)
-            max_tokens: Maximum tokens in response
-            top_p: Nucleus sampling parameter
-            stream: Whether to stream the response
-            
-        Returns:
-            LLMResponse with the model's response
-        """
-        try:
-            message_dicts = [{"role": msg.role, "content": msg.content} for msg in messages]
-            
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=message_dicts,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                stream=stream
-            )
-            
-            if stream:
-                # For streaming, we need to collect the response
-                content = ""
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        content += chunk.choices[0].delta.content
-                
-                return LLMResponse(
-                    content=content,
-                    finish_reason="stop",
-                    usage=None
-                )
-            else:
-                return LLMResponse(
-                    content=response.choices[0].message.content,
-                    finish_reason=response.choices[0].finish_reason,
-                    usage={
-                        "prompt_tokens": response.usage.prompt_tokens,
-                        "completion_tokens": response.usage.completion_tokens,
-                        "total_tokens": response.usage.total_tokens
-                    }
-                )
-        except Exception as e:
-            logger.error(f"Error in chat completion: {str(e)}")
-            raise
-    
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.async_client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        logger.info(f"{provider} client initialized with model: {self.model}")
+
     async def chat_completion_async(
         self,
         messages: List[Message],
@@ -123,19 +53,6 @@ class DeepSeekClient:
         top_p: float = 0.95,
         stream: bool = False
     ) -> LLMResponse:
-        """
-        Asynchronous chat completion request.
-        
-        Args:
-            messages: List of messages in conversation
-            temperature: Sampling temperature (0-2)
-            max_tokens: Maximum tokens in response
-            top_p: Nucleus sampling parameter
-            stream: Whether to stream the response
-            
-        Returns:
-            LLMResponse with the model's response
-        """
         try:
             message_dicts = [{"role": msg.role, "content": msg.content} for msg in messages]
             
@@ -157,7 +74,8 @@ class DeepSeekClient:
                 return LLMResponse(
                     content=content,
                     finish_reason="stop",
-                    usage=None
+                    usage=None,
+                    provider=self.provider
                 )
             else:
                 return LLMResponse(
@@ -167,12 +85,13 @@ class DeepSeekClient:
                         "prompt_tokens": response.usage.prompt_tokens,
                         "completion_tokens": response.usage.completion_tokens,
                         "total_tokens": response.usage.total_tokens
-                    }
+                    } if response.usage else None,
+                    provider=self.provider
                 )
         except Exception as e:
-            logger.error(f"Error in async chat completion: {str(e)}")
+            logger.error(f"Error in {self.provider} async chat completion: {str(e)}")
             raise
-    
+
     async def stream_chat_completion(
         self,
         messages: List[Message],
@@ -180,18 +99,6 @@ class DeepSeekClient:
         max_tokens: int = 4096,
         top_p: float = 0.95
     ) -> AsyncGenerator[str, None]:
-        """
-        Stream chat completion response token by token.
-        
-        Args:
-            messages: List of messages in conversation
-            temperature: Sampling temperature (0-2)
-            max_tokens: Maximum tokens in response
-            top_p: Nucleus sampling parameter
-            
-        Yields:
-            Response tokens as they arrive
-        """
         try:
             message_dicts = [{"role": msg.role, "content": msg.content} for msg in messages]
             
@@ -208,42 +115,99 @@ class DeepSeekClient:
                 if chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
         except Exception as e:
-            logger.error(f"Error in stream chat completion: {str(e)}")
+            logger.error(f"Error in {self.provider} stream chat completion: {str(e)}")
             raise
+
+class LLMClientManager:
+    """Manages multiple LLM providers and provides a unified interface."""
     
-    def count_tokens(self, text: str) -> int:
-        """
-        Estimate token count for text.
-        Uses simple approximation: ~4 characters per token.
+    def __init__(self):
+        self.clients: Dict[str, BaseLLMClient] = {}
+        self.default_provider = "deepseek"
+        self._initialize_from_env()
+
+    def _initialize_from_env(self):
+        """Initialize clients based on environment variables."""
+        # DeepSeek
+        ds_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY")
+        if ds_key:
+            self.clients["deepseek"] = OpenAICompatibleClient(
+                api_key=ds_key,
+                base_url="https://api.deepseek.com",
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                provider="deepseek"
+            )
         
-        Args:
-            text: Text to count tokens for
+        # OpenAI
+        oa_key = os.getenv("OPENAI_API_KEY")
+        if oa_key:
+            self.clients["openai"] = OpenAICompatibleClient(
+                api_key=oa_key,
+                base_url="https://api.openai.com/v1",
+                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo"),
+                provider="openai"
+            )
             
-        Returns:
-            Estimated token count
-        """
-        return len(text) // 4
+        # Custom
+        custom_key = os.getenv("CUSTOM_LLM_API_KEY")
+        if custom_key:
+            self.clients["custom"] = OpenAICompatibleClient(
+                api_key=custom_key,
+                base_url=os.getenv("CUSTOM_LLM_BASE_URL", ""),
+                model=os.getenv("CUSTOM_LLM_MODEL", ""),
+                provider="custom"
+            )
+
+    def get_client(self, provider: Optional[str] = None) -> BaseLLMClient:
+        provider = provider or self.default_provider
+        if provider not in self.clients:
+            if not self.clients:
+                raise ValueError("No LLM clients initialized. Set API keys in environment.")
+            # Fallback to first available client
+            return list(self.clients.values())[0]
+        return self.clients[provider]
+
+    async def chat_completion_async(self, messages: List[Message], provider: Optional[str] = None, **kwargs) -> LLMResponse:
+        client = self.get_client(provider)
+        return await client.chat_completion_async(messages, **kwargs)
+
+    async def stream_chat_completion(self, messages: List[Message], provider: Optional[str] = None, **kwargs) -> AsyncGenerator[str, None]:
+        client = self.get_client(provider)
+        async for chunk in client.stream_chat_completion(messages, **kwargs):
+            yield chunk
+
+# Global manager instance
+_manager: Optional[LLMClientManager] = None
+
+def get_llm_client() -> LLMClientManager:
+    """Get or create the global LLM client manager."""
+    global _manager
+    if _manager is None:
+        _manager = LLMClientManager()
+    return _manager
+
+def initialize_llm_client(api_key: Optional[str] = None, provider: str = "deepseek", **kwargs) -> LLMClientManager:
+    """Initialize the global LLM client manager."""
+    global _manager
+    if _manager is None:
+        _manager = LLMClientManager()
     
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the current model."""
-        return {
-            "model": self.model,
-            "base_url": self.base_url,
-            "api_key_set": bool(self.api_key)
-        }
-
-# Global client instance
-_client: Optional[DeepSeekClient] = None
-
-def get_llm_client() -> DeepSeekClient:
-    """Get or create the global LLM client."""
-    global _client
-    if _client is None:
-        _client = DeepSeekClient()
-    return _client
-
-def initialize_llm_client(api_key: Optional[str] = None, model: str = "deepseek-chat") -> DeepSeekClient:
-    """Initialize the global LLM client with custom settings."""
-    global _client
-    _client = DeepSeekClient(api_key=api_key, model=model)
-    return _client
+    # If explicit API key provided, override or add client
+    if api_key:
+        if provider == "deepseek":
+            _manager.clients["deepseek"] = OpenAICompatibleClient(
+                api_key=api_key,
+                base_url="https://api.deepseek.com",
+                model=kwargs.get("model", "deepseek-chat"),
+                provider="deepseek"
+            )
+        elif provider == "openai":
+            _manager.clients["openai"] = OpenAICompatibleClient(
+                api_key=api_key,
+                base_url="https://api.openai.com/v1",
+                model=kwargs.get("model", "gpt-4-turbo"),
+                provider="openai"
+            )
+    
+    _manager.default_provider = provider
+    return _manager

@@ -1,12 +1,13 @@
 """
-LangGraph-based agent orchestrator implementing the agentic loop.
-Manages the Thought-Action-Observation-Reflection workflow.
+Production-grade agent orchestrator implementing the agentic loop.
+Manages the Thought-Action-Observation-Reflection workflow with real tool execution.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
-from datetime import datetime
 import json
+import asyncio
+from typing import Dict, Any, Optional, List, Union
+from datetime import datetime
 
 from server.agent_state import (
     AgentState, Thought, Action, Observation, Reflection,
@@ -16,20 +17,22 @@ from server.agent_state import (
 )
 from server.llm_client import get_llm_client, Message
 from server.agent_config import get_system_prompt, AgentStateConfig
+from server.tool_manager import get_tool_manager
 
 logger = logging.getLogger(__name__)
 
 class AgentOrchestrator:
     """
-    Orchestrates the agent's agentic loop using LangGraph-inspired workflow.
+    Orchestrates the agent's agentic loop with real tool execution.
     Implements Thought-Action-Observation-Reflection cycle.
     """
     
     def __init__(self):
         """Initialize the orchestrator."""
-        self.llm_client = get_llm_client()
+        self.llm_manager = get_llm_client()
+        self.tool_manager = get_tool_manager()
         self.config = AgentStateConfig()
-        logger.info("Agent orchestrator initialized")
+        logger.info("Production Agent orchestrator initialized")
     
     async def run_agent_loop(
         self,
@@ -39,21 +42,13 @@ class AgentOrchestrator:
     ) -> AgentState:
         """
         Run the complete agentic loop for a user message.
-        
-        Args:
-            conversation_id: ID of the conversation
-            user_message: User's message/task
-            context: Optional context dictionary
-            
-        Returns:
-            Final agent state with response
         """
         # Create initial state
         state = create_initial_state(conversation_id, user_message)
         if context:
             state.context = context
         
-        logger.info(f"Starting agent loop for conversation {conversation_id}")
+        logger.info(f"Starting production agent loop for conversation {conversation_id}")
         
         # Main agentic loop
         while state.iteration < state.max_iterations:
@@ -65,18 +60,20 @@ class AgentOrchestrator:
                 # Phase 1: Thought - Agent thinks about the task
                 state = await self._thought_phase(state)
                 
-                # Check if we should stop
-                if state.response:
-                    logger.info("Agent decided to respond without further actions")
+                # Check if we should stop (agent decided to respond)
+                if state.thought and state.thought.next_action.lower() == "respond":
+                    logger.info("Agent decided to respond")
+                    state = await self._action_phase(state)
+                    state = await self._observation_phase(state)
                     break
                 
-                # Phase 2: Action - Agent takes action
+                # Phase 2: Action - Agent takes action (Tool Call)
                 state = await self._action_phase(state)
                 
-                # Phase 3: Observation - Observe the results
+                # Phase 3: Observation - Execute tool and observe results
                 state = await self._observation_phase(state)
                 
-                # Phase 4: Reflection - Reflect on the results
+                # Phase 4: Reflection - Reflect on the results if errors occur
                 if self.config.enable_reflection and state.error_count >= self.config.reflection_threshold:
                     state = await self._reflection_phase(state)
                 
@@ -86,7 +83,7 @@ class AgentOrchestrator:
                     break
             
             except Exception as e:
-                logger.error(f"Error in agent loop iteration {state.iteration}: {str(e)}")
+                logger.error(f"Critical error in agent loop iteration {state.iteration}: {str(e)}")
                 state.errors.append({
                     "iteration": state.iteration,
                     "error": str(e),
@@ -94,8 +91,8 @@ class AgentOrchestrator:
                 })
                 state.error_count += 1
                 
-                if state.error_count >= 3:
-                    state.response = f"Agent encountered too many errors: {str(e)}"
+                if state.error_count >= 5: # Increased tolerance for production
+                    state.response = f"Agent encountered too many critical errors: {str(e)}"
                     state.success = False
                     break
         
@@ -112,59 +109,78 @@ class AgentOrchestrator:
         logger.info("=== THOUGHT PHASE ===")
         
         try:
-            # Prepare prompt for thinking
-            thinking_prompt = f"""Analyze the following task and create a plan:
+            # Prepare context for thinking
+            available_tools = self.tool_manager.get_tools_list()
+            
+            history_context = ""
+            if state.actions and state.observations:
+                history_context = "\nPrevious Actions and Observations:\n"
+                for i in range(len(state.actions)):
+                    action = state.actions[i]
+                    obs = state.observations[i] if i < len(state.observations) else None
+                    history_context += f"Action {i+1}: {action.type} - {action.description}\n"
+                    if obs:
+                        history_context += f"Observation {i+1}: {'Success' if obs.success else 'Failure'} - {obs.result[:500]}...\n"
+
+            thinking_prompt = f"""Analyze the task and decide the next step.
 
 Task: {state.user_message}
+Current Iteration: {state.iteration}/{state.max_iterations}
+{history_context}
 
-Context: {json.dumps(state.context, indent=2) if state.context else "None"}
+Available Tools:
+{json.dumps(available_tools, indent=2)}
 
-Previous actions: {len(state.actions)}
-Previous errors: {state.error_count}
-
-Please provide:
-1. Your reasoning about the task
-2. A step-by-step plan to solve it
-3. The next action you should take
-4. Your confidence level (0-1)
-
-Format your response as JSON with keys: reasoning, plan (array), next_action, confidence"""
+Please provide your response in JSON format:
+{{
+  "reasoning": "Your detailed reasoning about the current state and next step",
+  "plan": ["Step 1", "Step 2", ...],
+  "next_action": "The name of the tool to call, or 'respond' to give the final answer",
+  "tool_input": {{ "param1": "value1", ... }},
+  "confidence": 0.9
+}}
+"""
             
-            # Get LLM response
             messages = [
                 Message(role="system", content=get_system_prompt()),
                 Message(role="user", content=thinking_prompt)
             ]
             
-            response = await self.llm_client.chat_completion_async(
+            response = await self.llm_manager.chat_completion_async(
                 messages=messages,
-                temperature=0.7,
+                temperature=0.2, # Lower temperature for more consistent JSON
                 max_tokens=1024
             )
             
             # Parse response
             try:
-                response_data = json.loads(response.content)
+                # Clean response content if it contains markdown code blocks
+                content = response.content.strip()
+                if content.startswith("```json"):
+                    content = content[7:-3].strip()
+                elif content.startswith("```"):
+                    content = content[3:-3].strip()
+                    
+                response_data = json.loads(content)
                 thought = Thought(
                     reasoning=response_data.get("reasoning", ""),
                     plan=response_data.get("plan", []),
-                    next_action=response_data.get("next_action", ""),
+                    next_action=response_data.get("next_action", "respond"),
                     confidence=float(response_data.get("confidence", 0.5))
                 )
-            except json.JSONDecodeError:
-                # Fallback if response is not JSON
+                # Store tool input in context for action phase
+                state.context["next_tool_input"] = response_data.get("tool_input", {})
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Failed to parse JSON thought: {str(e)}. Raw: {response.content}")
                 thought = Thought(
-                    reasoning=response.content,
-                    plan=["Execute the task"],
-                    next_action="proceed",
-                    confidence=0.5
+                    reasoning=f"Error parsing thought: {str(e)}. Raw response: {response.content}",
+                    plan=["Attempt to recover from parsing error"],
+                    next_action="respond",
+                    confidence=0.1
                 )
             
             state = update_state_with_thought(state, thought)
-            logger.info(f"Thought: {thought.reasoning[:100]}...")
-            logger.info(f"Plan: {thought.plan}")
-            logger.info(f"Next action: {thought.next_action}")
-            
             return state
         
         except Exception as e:
@@ -173,40 +189,31 @@ Format your response as JSON with keys: reasoning, plan (array), next_action, co
     
     async def _action_phase(self, state: AgentState) -> AgentState:
         """
-        Action phase: Agent executes the planned action.
+        Action phase: Agent prepares the planned action.
         """
         logger.info("=== ACTION PHASE ===")
         
         try:
             if not state.thought:
-                logger.warning("No thought available for action phase")
                 return state
             
-            # Determine action type based on thought
-            next_action = state.thought.next_action.lower()
+            next_action_name = state.thought.next_action.lower()
             
-            if "respond" in next_action or "answer" in next_action:
-                # Generate response
+            if next_action_name == "respond":
                 action = Action(
                     type=ActionType.RESPONSE,
-                    description="Generate final response"
-                )
-            elif "tool" in next_action or "execute" in next_action:
-                # Tool call action
-                action = Action(
-                    type=ActionType.TOOL_CALL,
-                    description=f"Execute: {next_action}"
+                    description="Generating final response to user"
                 )
             else:
-                # Default to planning
+                # It's a tool call
+                tool_input = state.context.get("next_tool_input", {})
                 action = Action(
-                    type=ActionType.PLANNING,
-                    description="Continue planning"
+                    type=ActionType.TOOL_CALL,
+                    description=f"Calling tool: {next_action_name}",
+                    input=tool_input
                 )
             
             state = update_state_with_action(state, action)
-            logger.info(f"Action: {action.type} - {action.description}")
-            
             return state
         
         except Exception as e:
@@ -215,70 +222,83 @@ Format your response as JSON with keys: reasoning, plan (array), next_action, co
     
     async def _observation_phase(self, state: AgentState) -> AgentState:
         """
-        Observation phase: Observe the results of the action.
+        Observation phase: Execute the action and observe results.
         """
         logger.info("=== OBSERVATION PHASE ===")
         
         try:
             if not state.actions:
-                logger.warning("No actions to observe")
                 return state
             
             last_action = state.actions[-1]
             
-            # Simulate observation based on action type
             if last_action.type == ActionType.RESPONSE:
-                # Generate response
-                response_prompt = f"""Based on the task and your analysis, provide a comprehensive response:
+                # Generate final response using LLM
+                response_prompt = f"""Based on the task and all previous observations, provide the final response to the user.
 
 Task: {state.user_message}
-Your reasoning: {state.thought.reasoning if state.thought else "N/A"}
-Your plan: {state.thought.plan if state.thought else []}
 
-Provide a clear, helpful response to the user."""
+History:
+{json.dumps(state.context.get('history', []), indent=2)}
+
+Provide a clear, comprehensive, and helpful response."""
                 
                 messages = [
                     Message(role="system", content=get_system_prompt()),
                     Message(role="user", content=response_prompt)
                 ]
                 
-                response = await self.llm_client.chat_completion_async(
+                response = await self.llm_manager.chat_completion_async(
                     messages=messages,
                     temperature=0.7,
                     max_tokens=2048
                 )
                 
                 state.response = response.content
-                
                 observation = Observation(
                     action_type=ActionType.RESPONSE,
-                    result=response.content[:200] + "...",
+                    result="Final response generated",
                     success=True
                 )
             
             elif last_action.type == ActionType.TOOL_CALL:
-                # Simulate tool execution
-                observation = Observation(
-                    action_type=ActionType.TOOL_CALL,
-                    result="Tool executed successfully",
-                    success=True
+                # Execute the actual tool
+                tool_name = state.thought.next_action
+                tool_input = last_action.input or {}
+                
+                tool_result = await self.tool_manager.execute_tool(
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    user_approved=True # Auto-approve for now in this loop
                 )
+                
+                if tool_result["success"]:
+                    observation = Observation(
+                        action_type=ActionType.TOOL_CALL,
+                        result=str(tool_result["result"]),
+                        success=True
+                    )
+                else:
+                    observation = Observation(
+                        action_type=ActionType.TOOL_CALL,
+                        result="",
+                        success=False,
+                        error=tool_result["error"]
+                    )
+                    state.error_count += 1
             
             else:
                 observation = Observation(
                     action_type=ActionType.PLANNING,
-                    result="Planning phase completed",
+                    result="Planning step completed",
                     success=True
                 )
             
             state = update_state_with_observation(state, observation)
-            logger.info(f"Observation: {observation.result}")
-            
             return state
         
         except Exception as e:
             logger.error(f"Error in observation phase: {str(e)}")
-            
             observation = Observation(
                 action_type=ActionType.TOOL_CALL,
                 result="",
@@ -286,7 +306,7 @@ Provide a clear, helpful response to the user."""
                 error=str(e)
             )
             state = update_state_with_observation(state, observation)
-            
+            state.error_count += 1
             return state
     
     async def _reflection_phase(self, state: AgentState) -> AgentState:
@@ -296,79 +316,39 @@ Provide a clear, helpful response to the user."""
         logger.info("=== REFLECTION PHASE ===")
         
         try:
-            # Prepare reflection prompt
-            recent_errors = state.errors[-3:] if state.errors else []
-            
-            reflection_prompt = f"""Analyze the errors that occurred and suggest improvements:
+            reflection_prompt = f"""You have encountered errors in your task. Reflect on what went wrong and how to fix it.
 
 Task: {state.user_message}
-Errors encountered: {json.dumps(recent_errors, indent=2)}
-Previous attempts: {state.iteration}
+Errors: {json.dumps(state.errors[-3:], indent=2)}
 
-Please provide:
-1. Analysis of what went wrong
-2. Root cause of the errors
-3. Lessons learned
-4. Adjustments to the approach
-
-Format your response as JSON with keys: analysis, lessons_learned (array), adjustments (array)"""
+Provide a reflection on the situation and a new strategy."""
             
             messages = [
                 Message(role="system", content=get_system_prompt()),
                 Message(role="user", content=reflection_prompt)
             ]
             
-            response = await self.llm_client.chat_completion_async(
-                messages=messages,
-                temperature=0.5,
-                max_tokens=1024
+            response = await self.llm_manager.chat_completion_async(messages=messages)
+            
+            reflection = Reflection(
+                thought_process=response.content,
+                adjustments=["Adjusting strategy based on reflection"],
+                confidence_score=0.6
             )
             
-            # Parse reflection
-            try:
-                response_data = json.loads(response.content)
-                reflection = Reflection(
-                    observation=f"Analyzed {len(recent_errors)} errors",
-                    analysis=response_data.get("analysis", ""),
-                    lessons_learned=response_data.get("lessons_learned", []),
-                    adjustments=response_data.get("adjustments", [])
-                )
-            except json.JSONDecodeError:
-                reflection = Reflection(
-                    observation="Error analysis completed",
-                    analysis=response.content,
-                    lessons_learned=[],
-                    adjustments=[]
-                )
-            
             state = update_state_with_reflection(state, reflection)
-            logger.info(f"Reflection: {reflection.analysis[:100]}...")
-            logger.info(f"Adjustments: {reflection.adjustments}")
-            
             return state
-        
         except Exception as e:
             logger.error(f"Error in reflection phase: {str(e)}")
             return state
-    
+
     def _should_terminate(self, state: AgentState) -> bool:
-        """
-        Determine if the agent should terminate the loop.
-        """
-        # Terminate if response is generated
+        """Check if the agent loop should terminate."""
         if state.response:
             return True
-        
-        # Terminate if max iterations reached
         if state.iteration >= state.max_iterations:
-            logger.info(f"Max iterations ({state.max_iterations}) reached")
+            state.response = "Maximum iterations reached without a final answer."
             return True
-        
-        # Terminate if too many errors
-        if state.error_count >= 5:
-            logger.info("Too many errors, terminating")
-            return True
-        
         return False
 
 # Global orchestrator instance
