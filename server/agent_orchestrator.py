@@ -227,7 +227,7 @@ Please provide your response in JSON format:
             
             if last_action.type == ActionType.TOOL_CALL:
                 tool_call = last_action.tool_call
-                result = await self.tool_manager.execute_tool(tool_call['tool_name'], tool_call['tool_input'])
+                result = await self.tool_manager.execute_tool(tool_call.tool_name, tool_call.tool_input)
                 observation = Observation(
                     action_type=ActionType.TOOL_CALL,
                     result=json.dumps(result),
