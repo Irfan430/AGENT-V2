@@ -52,7 +52,7 @@ SYSTEM_PROMPT = """You are {agent_name}, an advanced autonomous AI agent. You ar
 class LLMConfig:
     """Configuration for the language model."""
     
-    model: str = "deepseek-chat"
+    model: str = "deepseek-chat"  # Default to DeepSeek
     temperature: float = 0.7
     max_tokens: int = 4096
     top_p: float = 0.95
