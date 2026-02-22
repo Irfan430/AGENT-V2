@@ -99,9 +99,9 @@ User Output
 
 Make sure you have the following installed:
 
-- **Node.js** (v18 or higher) and **pnpm**
-- **Python** (v3.10 or higher) and **pip**
-- **Git**
+- **Node.js** ≥ 18.0.0 and **pnpm** ≥ 10.0.0
+- **Python** ≥ 3.9 and **pip**
+- **Git** and **gh CLI** (GitHub integration)
 
 ### Installation
 
@@ -152,29 +152,43 @@ Make sure you have the following installed:
 
 ## Running the Application
 
-You need to run the backend server and the frontend client in two separate terminals.
+### Option 1: Unified Command (Recommended) ⭐
 
-1.  **Start the Python Backend:**
+Start both Node.js and Python servers with a single command:
 
-    ```bash
-    python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8001 --reload
-    ```
+```bash
+pnpm dev:all
+# or
+./dev.sh
+```
 
-    The server will start on `http://localhost:8001`.
+This will:
+- Start Node.js server on http://localhost:3000 (Frontend + tRPC API)
+- Start Python agent on http://localhost:8001
+- Display logs for both servers
+- Handle graceful shutdown with Ctrl+C
 
-2.  **Start the React Frontend:**
+### Option 2: Separate Terminals
 
-    ```bash
-    pnpm dev
-    ```
+**Terminal 1 - Node.js (Frontend + tRPC API):**
+```bash
+pnpm dev
+# Available at http://localhost:3000
+```
 
-    The client will be available at `http://localhost:5173` (or another port if 5173 is busy).
+**Terminal 2 - Python (Agent):**
+```bash
+PYTHONPATH=/home/ubuntu/AGENT-V2:$PYTHONPATH python3 server/main.py
+# Available at http://localhost:8001
+```
 
 ### Using the Application
 
--   **Chat**: Open your browser to `http://localhost:5173/chat` to start interacting with the agent.
--   **Settings**: Navigate to `http://localhost:5173/settings` to configure the LLM provider, API key, and agent's system prompt.
--   **Dashboard**: Visit `http://localhost:5173/dashboard` to monitor the agent's activity.
+-   **Chat**: Open your browser to `http://localhost:3000/chat` to start interacting with the agent.
+-   **Settings**: Navigate to `http://localhost:3000/settings` to configure the LLM provider, API key, and agent's system prompt.
+-   **Dashboard**: Visit `http://localhost:3000/dashboard` to monitor the agent's activity.
+-   **tRPC API**: Access `http://localhost:3000/api/trpc` for API endpoints.
+-   **Python Agent**: Direct access to `http://localhost:8001` for agent settings and health checks.
 
 ---
 
@@ -190,10 +204,26 @@ For a more isolated setup, you can use Docker:
 
 2.  The application will be accessible at `http://localhost:5173`.
 
-### Recent Improvements and Bug Fixes
+### Recent Improvements and Bug Fixes (v1.1.0)
 
--   **Fixed `ToolCall` Subscriptable Error**: Resolved an issue where the agent could not correctly execute tool calls due to an incorrect object access, significantly improving tool execution reliability.
--   **Enhanced Agent Personality**: Updated the system prompt to ensure the agent communicates with a professional, helpful, and proactive demeanor, explaining its reasoning and actions clearly.
+✅ **Bug Fixes:**
+-   **Fixed tRPC Context**: Resolved missing req/res in dev mode causing context errors
+-   **Fixed JSON Parse Errors**: Corrected response format issues in frontend
+-   **Fixed Route Mismatch**: Proper endpoint routing between frontend and backend
+-   **Fixed Environment Setup**: Comprehensive .env configuration with API key management
+
+✅ **New Features:**
+-   **Unified Dev Command**: `pnpm dev:all` starts both servers with single command
+-   **Enhanced GitHub Tools**: Full gh CLI integration with repo creation, PR management, releases
+-   **Better Logging**: Improved server startup messages and error reporting
+-   **Automatic Port Detection**: Intelligent port allocation if default ports are busy
+-   **Dev Mode Auth Bypass**: Simplified development with AUTH_DISABLED=true
+
+✅ **Enhancements:**
+-   **GitHub Operations**: Create repos, manage issues, create PRs, handle releases
+-   **Git Operations**: Enhanced commit, push, pull, branch management
+-   **Error Handling**: Better error messages and recovery mechanisms
+-   **Performance**: Optimized server startup and response times
 
 ---
 

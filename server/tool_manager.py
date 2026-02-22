@@ -14,7 +14,7 @@ from datetime import datetime
 
 from server.file_tools import FileSystemTools
 from server.web_browser_tool import get_browser_tool
-from server.github_tools import GitHubTools
+from server.github_tools_enhanced import get_github_tools
 from server.task_scheduler import get_task_scheduler
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class ToolManager:
     
     def __init__(self):
         self.file_tools = FileSystemTools()
-        self.github_tools = GitHubTools()
+        self.github_tools = get_github_tools()
         self.browser_tool = get_browser_tool()
         self.tools: Dict[str, ToolDefinition] = {}
         self._register_tools()

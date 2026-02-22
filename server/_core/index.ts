@@ -41,7 +41,7 @@ async function startServer() {
   if (!authDisabled) {
     registerOAuthRoutes(app);
   } else {
-    console.log("⚠️ AUTH DISABLED (Development Mode)");
+    console.log("⚠️  AUTH DISABLED (Development Mode) — using dev-user context");
   }
 
   app.use(
@@ -50,10 +50,20 @@ async function startServer() {
       router: appRouter,
       createContext: (opts) => {
         if (authDisabled) {
+          // Return complete context with mock user for dev mode
           return {
+            req: opts.req,
+            res: opts.res,
             user: {
-              id: "dev-user",
+              id: 1,
+              openId: "dev-user",
               name: "Local Dev User",
+              email: "dev@local.host",
+              loginMethod: "dev",
+              role: "admin" as const,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              lastSignedIn: new Date(),
             },
           };
         }
@@ -76,7 +86,13 @@ async function startServer() {
   }
 
   server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+    console.log(`\n🚀 AGENT-V2 running at http://localhost:${port}/`);
+    console.log(`   Frontend  → http://localhost:${port}/`);
+    console.log(`   Chat      → http://localhost:${port}/chat`);
+    console.log(`   Dashboard → http://localhost:${port}/dashboard`);
+    console.log(`   Settings  → http://localhost:${port}/settings`);
+    console.log(`   tRPC API  → http://localhost:${port}/api/trpc`);
+    console.log(`   Python Agent → http://localhost:8001 (start separately or use pnpm dev:all)\n`);
   });
 }
 
