@@ -390,3 +390,35 @@ def get_performance_monitor() -> PerformanceMonitor:
         health_checker = get_health_checker()
         _performance_monitor = PerformanceMonitor(health_checker.metrics_collector)
     return _performance_monitor
+
+
+class MonitorFacade:
+    """Unified monitoring facade combining health checker and metrics."""
+    
+    def __init__(self):
+        self.health_checker = get_health_checker()
+        self.performance_monitor = get_performance_monitor()
+        self._metrics: Dict[str, float] = {}
+    
+    def record_metric(self, name: str, value: float, tags: Optional[Dict[str, str]] = None):
+        """Record a metric value."""
+        self._metrics[name] = self._metrics.get(name, 0) + value
+        self.health_checker.metrics_collector.record_metric(name, value, tags)
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get all metrics."""
+        return {
+            "counters": self._metrics,
+            "all_metrics": self.health_checker.metrics_collector.get_all_metrics(),
+            "health_status": self.health_checker.get_overall_status()
+        }
+
+# Global monitor instance
+_monitor: Optional[MonitorFacade] = None
+
+def get_monitor() -> MonitorFacade:
+    """Get or create the global monitor facade."""
+    global _monitor
+    if _monitor is None:
+        _monitor = MonitorFacade()
+    return _monitor

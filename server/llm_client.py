@@ -123,7 +123,7 @@ class LLMClientManager:
     
     def __init__(self):
         self.clients: Dict[str, BaseLLMClient] = {}
-        self.default_provider = "deepseek"
+        self.default_provider = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
         self._initialize_from_env()
 
     def _initialize_from_env(self):
@@ -143,8 +143,8 @@ class LLMClientManager:
         if oa_key:
             self.clients["openai"] = OpenAICompatibleClient(
                 api_key=oa_key,
-                base_url="https://api.openai.com/v1",
-                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo"),
+                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
                 provider="openai"
             )
             

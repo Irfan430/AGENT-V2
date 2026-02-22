@@ -3,8 +3,8 @@ import logging
 import json
 import uuid
 import os
-from typing import Dict, Any, Optional, List
-from fastapi import FastAPI, Request, HTTPException, status
+from typing import Dict, Any, Optional, List, Set
+from fastapi import FastAPI, Request, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -32,6 +32,31 @@ input_validator = InputValidator()
 security_auditor = get_security_auditor()
 monitor = get_monitor()
 
+# WebSocket connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+    
+    async def connect(self, websocket: WebSocket, conversation_id: str):
+        await websocket.accept()
+        self.active_connections[conversation_id] = websocket
+        logger.info(f"WebSocket connected: {conversation_id}")
+    
+    def disconnect(self, conversation_id: str):
+        if conversation_id in self.active_connections:
+            del self.active_connections[conversation_id]
+            logger.info(f"WebSocket disconnected: {conversation_id}")
+    
+    async def send_json(self, conversation_id: str, data: dict):
+        if conversation_id in self.active_connections:
+            try:
+                await self.active_connections[conversation_id].send_json(data)
+            except Exception as e:
+                logger.error(f"Error sending WebSocket message: {e}")
+                self.disconnect(conversation_id)
+
+ws_manager = ConnectionManager()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app."""
@@ -39,12 +64,28 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {AGENT_NAME} v{AGENT_VERSION}")
     
     # Initialize LLM client with the provided API key
-    api_key = os.getenv("LLM_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+    llm_key = os.getenv("LLM_API_KEY")
+    api_key = openai_key or llm_key
+    
     if not api_key:
-        logger.error("LLM_API_KEY not set. Agent will not function correctly.")
+        logger.error("No API key found (OPENAI_API_KEY or LLM_API_KEY). Agent will not function correctly.")
     else:
-        initialize_llm_client(api_key=api_key)
-        logger.info("LLM client initialized successfully")
+        provider = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
+        openai_base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        openai_model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        initialize_llm_client(api_key=api_key, provider=provider, model=openai_model)
+        from server.llm_client import OpenAICompatibleClient, get_llm_client
+        mgr = get_llm_client()
+        if openai_key:
+            mgr.clients["openai"] = OpenAICompatibleClient(
+                api_key=openai_key,
+                base_url=openai_base,
+                model=openai_model,
+                provider="openai"
+            )
+            mgr.default_provider = "openai"
+        logger.info(f"LLM client initialized with provider={mgr.default_provider}, model={openai_model}")
     
     # Initialize memory manager
     get_memory_manager()
@@ -91,21 +132,25 @@ class AgentRequest(BaseModel):
 async def health_check():
     """Returns the current health status of the application."""
     monitor.record_metric("health_check_requests", 1)
-    return {"status": "healthy", "timestamp": datetime.now().isoformat(), "version": AGENT_VERSION}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": AGENT_VERSION,
+        "agent_name": AGENT_NAME,
+        "active_connections": len(ws_manager.active_connections)
+    }
 
 @app.post("/agent/chat", summary="Send a message to the agent and get a response")
 async def chat_with_agent(request: AgentRequest, http_request: Request):
     """Processes a user message through the agentic loop and returns the final state."""
     monitor.record_metric("chat_requests", 1)
     
-    # Security: Rate limiting
     client_ip = http_request.client.host
     allowed, info = rate_limiter.is_allowed(client_ip)
     if not allowed:
         security_auditor.log_event("rate_limit_exceeded", "medium", {"ip": client_ip})
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
     
-    # Security: Input validation
     is_valid, error_msg = input_validator.validate_string(request.user_message, max_length=5000)
     if not is_valid:
         security_auditor.log_event("invalid_input", "low", {"ip": client_ip, "error": error_msg})
@@ -113,8 +158,9 @@ async def chat_with_agent(request: AgentRequest, http_request: Request):
 
     try:
         orchestrator = get_orchestrator()
+        conversation_id = request.conversation_id or str(uuid.uuid4())
         state = await orchestrator.run_agent_loop(
-            conversation_id=request.conversation_id or str(uuid.uuid4()),
+            conversation_id=conversation_id,
             user_message=request.user_message,
             context=request.context
         )
@@ -125,7 +171,7 @@ async def chat_with_agent(request: AgentRequest, http_request: Request):
         monitor.record_metric("chat_errors", 1)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-@app.post("/agent/stream_chat", summary="Stream agent's response in real-time")
+@app.post("/agent/stream_chat", summary="Stream agent's response in real-time via SSE")
 async def stream_chat_with_agent(request: AgentRequest, http_request: Request):
     """Streams the agent's thought process and final response using SSE."""
     monitor.record_metric("stream_chat_requests", 1)
@@ -142,22 +188,143 @@ async def stream_chat_with_agent(request: AgentRequest, http_request: Request):
         try:
             yield f"event: status\ndata: {json.dumps({'status': 'started', 'conversation_id': conversation_id})}\n\n"
             
-            # This is a simplified streaming implementation. 
-            # In a real Manus-like system, the orchestrator would yield events during its loop.
             state = await orchestrator.run_agent_loop(
                 conversation_id=conversation_id,
                 user_message=request.user_message,
                 context=request.context
             )
             
+            # Stream the response token by token for better UX
+            if state.response:
+                words = state.response.split(' ')
+                for i, word in enumerate(words):
+                    token = word + (' ' if i < len(words) - 1 else '')
+                    yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
+                    await asyncio.sleep(0.02)  # Small delay for streaming effect
+            
             # Send final state
             yield f"event: result\ndata: {json.dumps(state.dict(), default=str)}\n\n"
+            yield f"event: done\ndata: {json.dumps({'done': True})}\n\n"
             
         except Exception as e:
             logger.error(f"Streaming error: {str(e)}")
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+@app.websocket("/ws/chat/{conversation_id}")
+async def websocket_chat(websocket: WebSocket, conversation_id: str):
+    """WebSocket endpoint for real-time bidirectional chat."""
+    await ws_manager.connect(websocket, conversation_id)
+    
+    try:
+        # Send welcome message
+        await ws_manager.send_json(conversation_id, {
+            "type": "connected",
+            "conversation_id": conversation_id,
+            "message": f"Connected to {AGENT_NAME} v{AGENT_VERSION}"
+        })
+        
+        while True:
+            # Receive message from client
+            data = await websocket.receive_json()
+            user_message = data.get("message", "")
+            
+            if not user_message:
+                continue
+            
+            # Validate input
+            is_valid, error_msg = input_validator.validate_string(user_message, max_length=5000)
+            if not is_valid:
+                await ws_manager.send_json(conversation_id, {
+                    "type": "error",
+                    "error": f"Invalid input: {error_msg}"
+                })
+                continue
+            
+            # Send thinking status
+            await ws_manager.send_json(conversation_id, {
+                "type": "thinking",
+                "message": "Agent is thinking..."
+            })
+            
+            try:
+                orchestrator = get_orchestrator()
+                
+                # Send progress updates
+                await ws_manager.send_json(conversation_id, {
+                    "type": "status",
+                    "status": "processing",
+                    "message": "Running agentic loop..."
+                })
+                
+                state = await orchestrator.run_agent_loop(
+                    conversation_id=conversation_id,
+                    user_message=user_message
+                )
+                
+                # Send thought process info
+                if state.thought:
+                    await ws_manager.send_json(conversation_id, {
+                        "type": "thought",
+                        "reasoning": state.thought.reasoning,
+                        "plan": state.thought.plan,
+                        "next_action": state.thought.next_action,
+                        "confidence": state.thought.confidence
+                    })
+                
+                # Send actions taken
+                if state.actions:
+                    await ws_manager.send_json(conversation_id, {
+                        "type": "actions",
+                        "actions": [
+                            {
+                                "type": a.type,
+                                "description": a.description
+                            } for a in state.actions
+                        ]
+                    })
+                
+                # Stream the final response
+                if state.response:
+                    # Stream token by token
+                    words = state.response.split(' ')
+                    for i, word in enumerate(words):
+                        token = word + (' ' if i < len(words) - 1 else '')
+                        await ws_manager.send_json(conversation_id, {
+                            "type": "token",
+                            "content": token
+                        })
+                        await asyncio.sleep(0.02)
+                
+                # Send complete signal
+                await ws_manager.send_json(conversation_id, {
+                    "type": "complete",
+                    "success": state.success,
+                    "iterations": state.iteration,
+                    "conversation_id": conversation_id
+                })
+                
+            except Exception as e:
+                logger.error(f"Error processing WebSocket message: {e}")
+                await ws_manager.send_json(conversation_id, {
+                    "type": "error",
+                    "error": str(e)
+                })
+    
+    except WebSocketDisconnect:
+        ws_manager.disconnect(conversation_id)
+        logger.info(f"WebSocket disconnected: {conversation_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        ws_manager.disconnect(conversation_id)
 
 @app.get("/metrics", summary="Get application metrics")
 async def get_metrics():
@@ -167,5 +334,15 @@ async def get_metrics():
 async def get_security_summary():
     return security_auditor.get_security_summary()
 
+@app.get("/conversations/{conversation_id}/history")
+async def get_conversation_history(conversation_id: str):
+    """Get conversation history for a given conversation ID."""
+    try:
+        memory = get_memory_manager()
+        history = memory.get_conversation_history(conversation_id)
+        return {"conversation_id": conversation_id, "history": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

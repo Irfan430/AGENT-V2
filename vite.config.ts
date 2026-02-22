@@ -183,5 +183,28 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    proxy: {
+      // Proxy Python agent API calls
+      '/agent': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+        rewrite: (path) => path,
+      },
+      // Proxy WebSocket connections to Python agent
+      '/ws': {
+        target: 'ws://localhost:8001',
+        ws: true,
+        changeOrigin: true,
+      },
+      // Proxy health/metrics endpoints
+      '/health': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+      '/metrics': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+    },
   },
 });
