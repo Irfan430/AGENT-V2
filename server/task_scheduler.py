@@ -18,7 +18,6 @@ try:
     APSCHEDULER_AVAILABLE = True
 except ImportError:
     APSCHEDULER_AVAILABLE = False
-    # logger is not yet configured here, so print directly
     print("WARNING: APScheduler not installed. Task scheduling features will be disabled. Install with: pip install apscheduler")
 
 logger = logging.getLogger(__name__)
@@ -80,11 +79,14 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"Error stopping scheduler: {str(e)}")
     
-    async def _task_wrapper(self, task_id: str, task_func: Callable, *args, **kwargs):
+    async def _task_wrapper(self, task_id: str, task_func_name: str, task_func_kwargs: Dict[str, Any]):
         """
-        Wrapper to execute task function and record its status.
+        Wrapper to execute task function via ToolManager and record its status.
         """
-        logger.info(f"Executing scheduled task: {task_id}")
+        from server.tool_manager import get_tool_manager # Import here to avoid circular dependency
+        tool_manager = get_tool_manager()
+
+        logger.info(f"Executing scheduled task: {task_id} - {task_func_name}")
         self.tasks[task_id]["status"] = TaskStatus.RUNNING
         self.tasks[task_id]["last_run_time"] = datetime.now().isoformat()
         
@@ -92,23 +94,25 @@ class TaskScheduler:
         result = None
         error_msg = None
         try:
-            if asyncio.iscoroutinefunction(task_func):
-                result = await task_func(*args, **kwargs)
+            tool_result = await tool_manager.execute_tool(task_func_name, task_func_kwargs)
+            success = tool_result.get("success", False)
+            if success:
+                result = tool_result.get("result")
+                logger.info(f"Task {task_id} completed successfully.")
             else:
-                result = task_func(*args, **kwargs)
-            success = True
-            logger.info(f"Task {task_id} completed successfully.")
+                error_msg = tool_result.get("error", "Unknown error during tool execution")
+                logger.error(f"Task {task_id} failed: {error_msg}")
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Task {task_id} failed: {error_msg}")
+            logger.error(f"Task {task_id} failed with exception: {error_msg}")
         finally:
             await self.record_task_execution(task_id, success, result, error_msg)
             if task_id in self.tasks and self.tasks[task_id]["type"] == "one-time":
                 del self.tasks[task_id] # Remove one-time tasks after execution
 
     async def schedule_once(self, task_id: str, task_name: str,
-                           task_func: Callable, run_at: datetime,
-                           kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                           run_at: datetime, task_func_name: str,
+                           task_func_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Schedule a one-time task.
         """
@@ -116,14 +120,13 @@ class TaskScheduler:
             return {"success": False, "error": "Scheduler not available"}
         
         try:
-            kwargs = kwargs or {}
+            task_func_kwargs = task_func_kwargs or {}
             
             self.scheduler.add_job(
                 self._task_wrapper,
                 trigger='date',
                 run_date=run_at,
-                args=[task_id, task_func], # Pass task_func to wrapper
-                kwargs=kwargs,
+                args=[task_id, task_func_name, task_func_kwargs],
                 id=task_id,
                 name=task_name,
                 replace_existing=True
@@ -136,7 +139,8 @@ class TaskScheduler:
                 "status": TaskStatus.PENDING,
                 "scheduled_at": datetime.now().isoformat(),
                 "run_at": run_at.isoformat(),
-                "kwargs": kwargs
+                "task_func_name": task_func_name,
+                "task_func_kwargs": task_func_kwargs
             }
             
             logger.info(f"Scheduled one-time task: {task_id} to run at {run_at}")
@@ -147,8 +151,8 @@ class TaskScheduler:
             return {"success": False, "error": str(e)}
     
     async def schedule_recurring(self, task_id: str, task_name: str,
-                                task_func: Callable, cron_expression: str,
-                                kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                task_func_name: str, cron_expression: str,
+                                task_func_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Schedule a recurring task with cron expression.
         """
@@ -156,13 +160,12 @@ class TaskScheduler:
             return {"success": False, "error": "Scheduler not available"}
         
         try:
-            kwargs = kwargs or {}
+            task_func_kwargs = task_func_kwargs or {}
             
             self.scheduler.add_job(
                 self._task_wrapper,
                 trigger=CronTrigger.from_crontab(cron_expression),
-                args=[task_id, task_func],
-                kwargs=kwargs,
+                args=[task_id, task_func_name, task_func_kwargs],
                 id=task_id,
                 name=task_name,
                 replace_existing=True
@@ -175,7 +178,8 @@ class TaskScheduler:
                 "status": TaskStatus.PENDING,
                 "scheduled_at": datetime.now().isoformat(),
                 "cron_expression": cron_expression,
-                "kwargs": kwargs
+                "task_func_name": task_func_name,
+                "task_func_kwargs": task_func_kwargs
             }
             
             logger.info(f"Scheduled recurring task: {task_id} with cron: {cron_expression}")
@@ -186,8 +190,8 @@ class TaskScheduler:
             return {"success": False, "error": str(e)}
     
     async def schedule_interval(self, task_id: str, task_name: str,
-                               task_func: Callable, interval_seconds: int,
-                               kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                               task_func_name: str, interval_seconds: int,
+                               task_func_kwargs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Schedule a task to run at fixed intervals.
         """
@@ -195,13 +199,12 @@ class TaskScheduler:
             return {"success": False, "error": "Scheduler not available"}
         
         try:
-            kwargs = kwargs or {}
+            task_func_kwargs = task_func_kwargs or {}
             
             self.scheduler.add_job(
                 self._task_wrapper,
                 trigger=IntervalTrigger(seconds=interval_seconds),
-                args=[task_id, task_func],
-                kwargs=kwargs,
+                args=[task_id, task_func_name, task_func_kwargs],
                 id=task_id,
                 name=task_name,
                 replace_existing=True
@@ -214,7 +217,8 @@ class TaskScheduler:
                 "status": TaskStatus.PENDING,
                 "scheduled_at": datetime.now().isoformat(),
                 "interval_seconds": interval_seconds,
-                "kwargs": kwargs
+                "task_func_name": task_func_name,
+                "task_func_kwargs": task_func_kwargs
             }
             
             logger.info(f"Scheduled interval task: {task_id} every {interval_seconds} seconds")
@@ -243,15 +247,21 @@ class TaskScheduler:
             return {"success": False, "error": str(e)}
     
     def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """Get status of a task."""
+        """
+        Get status of a task.
+        """
         return self.tasks.get(task_id)
     
     def get_all_tasks(self) -> Dict[str, Dict[str, Any]]:
-        """Get all scheduled tasks."""
+        """
+        Get all scheduled tasks.
+        """
         return self.tasks.copy()
     
     def get_task_history(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get task execution history."""
+        """
+        Get task execution history.
+        """
         return self.task_history[-limit:]
     
     async def record_task_execution(self, task_id: str, 

@@ -1,13 +1,15 @@
 """
 Advanced error handling and self-correction system.
 Classifies errors, suggests recovery strategies, and learns from failures.
+Implements Phase 3.1 and 3.2 of the Production Roadmap.
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable
 from datetime import datetime
 from enum import Enum
 import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ class ErrorType(str, Enum):
     TIMEOUT = "timeout"
     PERMISSION = "permission"
     RESOURCE = "resource"
+    PARSING = "parsing"
     UNKNOWN = "unknown"
 
 class RecoveryStrategy(str, Enum):
@@ -38,6 +41,7 @@ class RecoveryStrategy(str, Enum):
     SKIP_STEP = "skip_step"
     ABORT = "abort"
     MANUAL_INTERVENTION = "manual_intervention"
+    REFLECT_AND_REPLAN = "reflect_and_replan"
 
 class ErrorClassification:
     """Classification of an error."""
@@ -48,13 +52,15 @@ class ErrorClassification:
         error_type: ErrorType,
         severity: ErrorSeverity,
         recovery_strategy: RecoveryStrategy,
-        suggested_action: str
+        suggested_action: str,
+        context: Optional[Dict[str, Any]] = None
     ):
         self.error_message = error_message
         self.error_type = error_type
         self.severity = severity
         self.recovery_strategy = recovery_strategy
         self.suggested_action = suggested_action
+        self.context = context or {}
         self.timestamp = datetime.now().isoformat()
 
 class ErrorHandler:
@@ -66,7 +72,7 @@ class ErrorHandler:
         """Initialize the error handler."""
         self.error_patterns: Dict[str, Dict[str, Any]] = {}
         self.error_history: List[ErrorClassification] = []
-        self.recovery_success_rate: Dict[str, float] = {}
+        self.recovery_success_rate: Dict[str, Dict[str, int]] = {}
         logger.info("Error handler initialized")
     
     def classify_error(self, error: Exception, context: Optional[Dict[str, Any]] = None) -> ErrorClassification:
@@ -81,7 +87,7 @@ class ErrorHandler:
             ErrorClassification with suggested recovery
         """
         error_message = str(error)
-        error_type = self._determine_error_type(error, error_message)
+        error_type = self._determine_error_type(error, error_message, context)
         severity = self._determine_severity(error_type, error_message)
         recovery_strategy = self._determine_recovery_strategy(error_type, severity)
         suggested_action = self._generate_suggested_action(error_type, recovery_strategy, error_message)
@@ -91,7 +97,8 @@ class ErrorHandler:
             error_type=error_type,
             severity=severity,
             recovery_strategy=recovery_strategy,
-            suggested_action=suggested_action
+            suggested_action=suggested_action,
+            context=context
         )
         
         self.error_history.append(classification)
@@ -101,71 +108,59 @@ class ErrorHandler:
         
         return classification
     
-    def _determine_error_type(self, error: Exception, error_message: str) -> ErrorType:
+    def _determine_error_type(self, error: Exception, error_message: str, context: Optional[Dict[str, Any]]) -> ErrorType:
         """Determine the type of error."""
         error_name = type(error).__name__
         
-        # API errors
-        if "api" in error_message.lower() or "request" in error_message.lower():
+        # Specific checks based on common error messages/types
+        if "api key" in error_message.lower() or "authentication" in error_message.lower() or "401" in error_message:
             return ErrorType.LLM_API
-        
-        # Network errors
-        if any(keyword in error_message.lower() for keyword in ["connection", "timeout", "network", "unreachable"]):
+        if "connection refused" in error_message.lower() or "host unreachable" in error_message.lower():
             return ErrorType.NETWORK
-        
-        # Timeout errors
-        if "timeout" in error_message.lower() or error_name == "TimeoutError":
+        if "timeout" in error_message.lower() or error_name == "TimeoutError" or "asyncio.TimeoutError" in error_message:
             return ErrorType.TIMEOUT
-        
-        # Permission errors
-        if "permission" in error_message.lower() or error_name == "PermissionError":
+        if "permission denied" in error_message.lower() or error_name == "PermissionError":
             return ErrorType.PERMISSION
-        
-        # Resource errors
-        if any(keyword in error_message.lower() for keyword in ["memory", "disk", "resource", "out of"]):
+        if "no space left" in error_message.lower() or "memory" in error_message.lower():
             return ErrorType.RESOURCE
-        
-        # Validation errors
-        if "validation" in error_message.lower() or error_name == "ValueError":
+        if "jsondecodeerror" in error_message.lower() or "failed to parse json" in error_message.lower():
+            return ErrorType.PARSING
+        if "validation error" in error_message.lower() or error_name == "ValueError":
             return ErrorType.VALIDATION
         
-        # Tool execution errors
-        if "tool" in error_message.lower() or error_name == "CalledProcessError":
-            return ErrorType.TOOL_EXECUTION
+        # Context-based checks
+        if context and "last_action" in context:
+            action_type = context["last_action"].get("type")
+            if action_type == "tool_call":
+                return ErrorType.TOOL_EXECUTION
         
-        # Memory errors
-        if "memory" in error_message.lower() or "chroma" in error_message.lower():
+        if "chroma" in error_message.lower() or "vector database" in error_message.lower():
             return ErrorType.MEMORY
         
         return ErrorType.UNKNOWN
     
     def _determine_severity(self, error_type: ErrorType, error_message: str) -> ErrorSeverity:
         """Determine the severity of an error."""
-        if error_type in [ErrorType.RESOURCE, ErrorType.PERMISSION]:
+        if error_type in [ErrorType.RESOURCE, ErrorType.PERMISSION, ErrorType.LLM_API]:
             return ErrorSeverity.CRITICAL
         
-        if error_type in [ErrorType.LLM_API, ErrorType.MEMORY]:
+        if error_type in [ErrorType.MEMORY, ErrorType.NETWORK, ErrorType.TIMEOUT]:
             return ErrorSeverity.HIGH
         
-        if error_type in [ErrorType.TIMEOUT, ErrorType.NETWORK]:
+        if error_type in [ErrorType.TOOL_EXECUTION, ErrorType.PARSING]:
             return ErrorSeverity.MEDIUM
         
-        if error_type in [ErrorType.VALIDATION, ErrorType.TOOL_EXECUTION]:
-            if "critical" in error_message.lower():
-                return ErrorSeverity.HIGH
-            return ErrorSeverity.MEDIUM
+        if error_type == ErrorType.VALIDATION:
+            return ErrorSeverity.LOW
         
-        return ErrorSeverity.LOW
+        return ErrorSeverity.UNKNOWN
     
     def _determine_recovery_strategy(self, error_type: ErrorType, severity: ErrorSeverity) -> RecoveryStrategy:
         """Determine the best recovery strategy for an error."""
         if severity == ErrorSeverity.CRITICAL:
-            return RecoveryStrategy.MANUAL_INTERVENTION
+            return RecoveryStrategy.REFLECT_AND_REPLAN # Agent needs to rethink fundamentally
         
-        if error_type == ErrorType.TIMEOUT:
-            return RecoveryStrategy.RETRY
-        
-        if error_type == ErrorType.NETWORK:
+        if error_type in [ErrorType.TIMEOUT, ErrorType.NETWORK, ErrorType.LLM_API]:
             return RecoveryStrategy.RETRY
         
         if error_type == ErrorType.TOOL_EXECUTION:
@@ -174,11 +169,11 @@ class ErrorHandler:
         if error_type == ErrorType.VALIDATION:
             return RecoveryStrategy.ADJUST_PARAMS
         
-        if error_type == ErrorType.LLM_API:
-            return RecoveryStrategy.RETRY
+        if error_type == ErrorType.PARSING:
+            return RecoveryStrategy.REFLECT_AND_REPLAN # Agent needs to adjust its output format
         
         if error_type == ErrorType.MEMORY:
-            return RecoveryStrategy.SKIP_STEP
+            return RecoveryStrategy.REFLECT_AND_REPLAN # Memory issues often require re-evaluation
         
         return RecoveryStrategy.ABORT
     
@@ -190,21 +185,24 @@ class ErrorHandler:
     ) -> str:
         """Generate a suggested action for recovery."""
         if recovery_strategy == RecoveryStrategy.RETRY:
-            return f"Retry the operation (error: {error_type.value})"
+            return f"Retry the last operation (error: {error_type.value})"
         
         if recovery_strategy == RecoveryStrategy.FALLBACK_TOOL:
-            return f"Try an alternative tool or approach"
+            return f"Try an alternative tool or approach for the current step"
         
         if recovery_strategy == RecoveryStrategy.ADJUST_PARAMS:
-            return f"Adjust parameters and retry"
+            return f"Adjust parameters for the tool call and retry"
         
         if recovery_strategy == RecoveryStrategy.SKIP_STEP:
-            return f"Skip this step and continue"
+            return f"Skip this problematic step and attempt to continue with the plan"
+        
+        if recovery_strategy == RecoveryStrategy.REFLECT_AND_REPLAN:
+            return f"Reflect on the error and generate a new plan to overcome it"
         
         if recovery_strategy == RecoveryStrategy.MANUAL_INTERVENTION:
-            return f"Manual intervention required: {error_message[:100]}"
+            return f"Manual intervention required: {error_message[:100]}..."
         
-        return f"Abort operation and report error"
+        return f"Abort operation and report error: {error_message[:100]}..."
     
     def _update_error_patterns(self, error_type: ErrorType, error_message: str):
         """Update error patterns for learning."""
@@ -220,13 +218,12 @@ class ErrorHandler:
         self.error_patterns[key]["count"] += 1
         self.error_patterns[key]["last_occurrence"] = datetime.now().isoformat()
         
-        # Store unique error messages (limit to 10)
         if error_message not in self.error_patterns[key]["messages"]:
             self.error_patterns[key]["messages"].append(error_message)
             if len(self.error_patterns[key]["messages"]) > 10:
                 self.error_patterns[key]["messages"] = self.error_patterns[key]["messages"][-10:]
     
-    def record_recovery_success(self, error_type: ErrorType, strategy: RecoveryStrategy, success: bool):
+    def record_recovery_attempt(self, error_type: ErrorType, strategy: RecoveryStrategy, success: bool):
         """Record the success of a recovery strategy."""
         key = f"{error_type.value}_{strategy.value}"
         
@@ -237,11 +234,13 @@ class ErrorHandler:
         if success:
             self.recovery_success_rate[key]["success"] += 1
         
-        success_rate = self.recovery_success_rate[key]["success"] / self.recovery_success_rate[key]["total"]
-        logger.info(f"Recovery strategy {strategy.value} for {error_type.value}: {success_rate:.2%} success rate")
+        success_count = self.recovery_success_rate[key]["success"]
+        total_count = self.recovery_success_rate[key]["total"]
+        logger.info(f"Recovery strategy {strategy.value} for {error_type.value}: {success_count}/{total_count} success")
     
     def get_error_statistics(self) -> Dict[str, Any]:
-        """Get statistics about errors and recovery."""
+        """
+        Get statistics about errors and recovery."""
         total_errors = len(self.error_history)
         error_by_type = {}
         error_by_severity = {}
@@ -278,6 +277,7 @@ class ErrorHandler:
 class SelfCorrectionEngine:
     """
     Self-correction engine that learns from errors and adjusts strategies.
+    Implements Phase 3.2 of the Production Roadmap.
     """
     
     def __init__(self, error_handler: ErrorHandler):
@@ -290,83 +290,104 @@ class SelfCorrectionEngine:
         self,
         error: Exception,
         context: Dict[str, Any],
-        retry_callback: callable
+        llm_client: Any, # Pass LLM client here to avoid circular dependency
+        system_prompt: str,
+        available_tools: List[Dict[str, Any]]
     ) -> tuple[bool, Optional[str]]:
         """
         Attempt to correct an error using recovery strategies.
         
         Args:
             error: The exception that occurred
-            context: Context about the error
-            retry_callback: Callback function to retry the operation
+            context: Additional context about the error (e.g., last action, user message)
+            llm_client: The LLM client instance for generating new thoughts/plans
+            system_prompt: The system prompt for the LLM
+            available_tools: List of available tools for the LLM to consider
             
         Returns:
-            Tuple of (success, result_or_error_message)
+            A tuple (correction_attempted, correction_message).
         """
         classification = self.error_handler.classify_error(error, context)
+        strategy = classification.recovery_strategy
+        error_message = classification.error_message
         
-        logger.info(f"Attempting correction: {classification.recovery_strategy.value}")
+        logger.info(f"Attempting self-correction with strategy: {strategy.value}")
         
-        try:
-            if classification.recovery_strategy == RecoveryStrategy.RETRY:
-                result = await retry_callback()
-                self.error_handler.record_recovery_success(
-                    classification.error_type,
-                    classification.recovery_strategy,
-                    True
-                )
-                return True, result
-            
-            elif classification.recovery_strategy == RecoveryStrategy.ADJUST_PARAMS:
-                # Adjust parameters (implementation depends on context)
-                logger.info("Adjusting parameters for retry...")
-                result = await retry_callback()
-                self.error_handler.record_recovery_success(
-                    classification.error_type,
-                    classification.recovery_strategy,
-                    True
-                )
-                return True, result
-            
-            elif classification.recovery_strategy == RecoveryStrategy.SKIP_STEP:
-                logger.info("Skipping step and continuing...")
-                self.error_handler.record_recovery_success(
-                    classification.error_type,
-                    classification.recovery_strategy,
-                    True
-                )
-                return True, "Step skipped"
-            
-            else:
-                self.error_handler.record_recovery_success(
-                    classification.error_type,
-                    classification.recovery_strategy,
-                    False
-                )
-                return False, classification.suggested_action
+        correction_message = None
+        correction_success = False
         
-        except Exception as e:
-            logger.error(f"Correction attempt failed: {str(e)}")
-            self.error_handler.record_recovery_success(
-                classification.error_type,
-                classification.recovery_strategy,
-                False
-            )
-            return False, str(e)
+        if strategy == RecoveryStrategy.RETRY:
+            # Simple retry logic (handled by orchestrator for now, but could be here)
+            correction_message = f"Retrying operation due to {classification.error_type.value} error."
+            correction_success = True # Assume retry is an attempt
+            
+        elif strategy == RecoveryStrategy.REFLECT_AND_REPLAN:
+            # Use LLM to reflect and generate a new plan
+            reflection_prompt = f"""An error occurred during agent execution. Reflect on the error and propose a new plan or action.
 
-# Global instances
-_error_handler: Optional[ErrorHandler] = None
-_self_correction_engine: Optional[SelfCorrectionEngine] = None
+Error Type: {classification.error_type.value}
+Error Message: {error_message}
+Context: {json.dumps(context, indent=2)}
+
+Based on this, what is the best next step? Provide your response in JSON format:
+{{
+  "reasoning": "Your detailed reasoning for the new plan/action",
+  "plan": ["Step 1", "Step 2", ...],
+  "next_action": "The name of the tool to call, or 'respond' to give the final answer",
+  "tool_input": {{ "param1": "value1", ... }},
+  "confidence": 0.8
+}}
+"""
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": reflection_prompt}
+            ]
+            
+            try:
+                response = await llm_client.chat_completion_async(messages=messages, temperature=0.5, max_tokens=1024)
+                response_content = response.content.strip()
+                if response_content.startswith("```json"):
+                    response_content = response_content[7:-3].strip()
+                elif response_content.startswith("```"):
+                    response_content = response_content[3:-3].strip()
+                
+                reflection_data = json.loads(response_content)
+                reasoning = reflection_data.get("reasoning", "No specific reasoning provided.")
+                correction_message = f"Agent reflected and proposed new plan: {reasoning}"
+                correction_success = True
+                # The orchestrator will use this new thought to update its state
+                context["new_thought_from_reflection"] = reflection_data
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.error(f"Failed to parse reflection response: {str(e)}. Raw: {response_content}")
+                correction_message = f"Reflection failed due to parsing error: {str(e)}"
+                correction_success = False
+            
+        # Other strategies like FALLBACK_TOOL, ADJUST_PARAMS would require more complex logic
+        # For now, we'll focus on RETRY and REFLECT_AND_REPLAN
+        
+        self.error_handler.record_recovery_attempt(classification.error_type, strategy, correction_success)
+        self.correction_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "error_classification": classification.__dict__,
+            "strategy_attempted": strategy.value,
+            "success": correction_success,
+            "message": correction_message
+        })
+        
+        return correction_success, correction_message
+
+# Global instance
+_error_handler = None
+_self_correction_engine = None
 
 def get_error_handler() -> ErrorHandler:
-    """Get or create the global error handler."""
     global _error_handler
     if _error_handler is None:
         _error_handler = ErrorHandler()
     return _error_handler
 
 def get_self_correction_engine() -> SelfCorrectionEngine:
-    """Get or create the global self-correction engine."""
     global _self_correction_engine
     if _self_correction_engine is None:
         _self_correction_engine = SelfCorrectionEngine(get_error_handler())

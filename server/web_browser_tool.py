@@ -31,7 +31,7 @@ class WebBrowserTool:
             self._playwright = await async_playwright().start()
             self.browser = await self._playwright.chromium.launch(headless=self.headless)
             self.context = await self.browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             self.page = await self.context.new_page()
             self.page.set_default_timeout(self.timeout)
@@ -104,7 +104,7 @@ class WebBrowserTool:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def take_screenshot(self, path: str = "screenshot.png", full_page: bool = False) -> Dict[str, Any]:
+    async def take_screenshot(self, path: str = "/tmp/screenshot.png", full_page: bool = False) -> Dict[str, Any]:
         """Take a screenshot of the current page."""
         try:
             if not self.page:

@@ -20,7 +20,7 @@ class MemoryManager:
     Handles conversation persistence, semantic search, and memory compression.
     """
     
-    def __init__(self, db_path: str = "./chroma_db"):
+    def __init__(self, db_path: str = "/home/ubuntu/AGENT-V2/chroma_db"):
         """
         Initialize the memory manager.
         """
@@ -201,9 +201,6 @@ class MemoryManager:
             cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
             
             for name, collection in self.collections.items():
-                # ChromaDB doesn't support direct date comparison in 'where' easily for all versions
-                # So we get all and filter manually if needed, or use a more advanced query
-                # For now, we'll log the intent
                 logger.info(f"Cleanup triggered for {name} collection (older than {cutoff_date})")
                 
         except Exception as e:
