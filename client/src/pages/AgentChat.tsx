@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Send, Copy, Download, Brain, Zap, ChevronDown, ChevronRight, Moon, Sun, Home, BarChart2 } from 'lucide-react';
+import { Loader2, Send, Copy, Download, Brain, Zap, ChevronDown, ChevronRight, Moon, Sun, Home, BarChart2, Settings } from 'lucide-react';
 import { Streamdown } from 'streamdown';
 import { useLocation } from 'wouter';
 
@@ -351,6 +351,9 @@ export default function AgentChat() {
             </Button>
             <Button variant="ghost" size="sm" onClick={() => navigate('/dashboard')}>
               <BarChart2 className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
+              <Settings className="w-4 h-4" />
             </Button>
             <Button variant="ghost" size="sm" onClick={toggleDarkMode}>
               {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}

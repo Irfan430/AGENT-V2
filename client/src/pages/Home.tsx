@@ -2,7 +2,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, Brain, Zap, Database, Code2, MessageSquare } from "lucide-react";
+import { ArrowRight, Brain, Zap, Database, Code2, MessageSquare, Settings } from "lucide-react";
 import { useLocation } from "wouter";
 
 export default function Home() {
@@ -22,6 +22,12 @@ export default function Home() {
             {isAuthenticated && (
               <span className="text-sm text-muted-foreground">Welcome, {user?.name}</span>
             )}
+            <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>
+              <Settings className="w-4 h-4 mr-1" /> Settings
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => navigate('/dashboard')}>
+              Dashboard
+            </Button>
           </div>
         </div>
       </nav>

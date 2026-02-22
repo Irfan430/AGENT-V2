@@ -71,21 +71,44 @@ async def lifespan(app: FastAPI):
     if not api_key:
         logger.error("No API key found (OPENAI_API_KEY or LLM_API_KEY). Agent will not function correctly.")
     else:
-        provider = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
-        openai_base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        openai_model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-        initialize_llm_client(api_key=api_key, provider=provider, model=openai_model)
         from server.llm_client import OpenAICompatibleClient, get_llm_client
+        
+        provider = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")
         mgr = get_llm_client()
+        
+        # Initialize DeepSeek if key available
+        deepseek_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("LLM_API_KEY")
+        if deepseek_key:
+            deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+            mgr.clients["deepseek"] = OpenAICompatibleClient(
+                api_key=deepseek_key,
+                base_url="https://api.deepseek.com",
+                model=deepseek_model,
+                provider="deepseek"
+            )
+            if provider == "deepseek":
+                mgr.default_provider = "deepseek"
+        
+        # Initialize OpenAI if key available
         if openai_key:
+            openai_base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            openai_model = os.getenv("OPENAI_MODEL", "gpt-4o")
             mgr.clients["openai"] = OpenAICompatibleClient(
                 api_key=openai_key,
                 base_url=openai_base,
                 model=openai_model,
                 provider="openai"
             )
-            mgr.default_provider = "openai"
-        logger.info(f"LLM client initialized with provider={mgr.default_provider}, model={openai_model}")
+            if provider == "openai":
+                mgr.default_provider = "openai"
+        
+        # Set default provider
+        if provider in mgr.clients:
+            mgr.default_provider = provider
+        elif mgr.clients:
+            mgr.default_provider = list(mgr.clients.keys())[0]
+        
+        logger.info(f"LLM client initialized with provider={mgr.default_provider}, available={list(mgr.clients.keys())}")
     
     # Initialize memory manager
     get_memory_manager()
@@ -329,6 +352,136 @@ async def websocket_chat(websocket: WebSocket, conversation_id: str):
 @app.get("/metrics", summary="Get application metrics")
 async def get_metrics():
     return monitor.get_metrics()
+
+class LLMSettingsRequest(BaseModel):
+    provider: str
+    api_key: str
+    model: str
+    base_url: str
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 4096
+    top_p: Optional[float] = 0.95
+
+class AgentSettingsRequest(BaseModel):
+    name: Optional[str] = "Manus Agent Pro"
+    system_prompt: Optional[str] = None
+    max_iterations: Optional[int] = 10
+    enable_reflection: Optional[bool] = True
+    enable_memory: Optional[bool] = True
+    enable_web_browsing: Optional[bool] = True
+    enable_file_ops: Optional[bool] = True
+    enable_github: Optional[bool] = True
+
+class SettingsRequest(BaseModel):
+    llm: LLMSettingsRequest
+    agent: Optional[AgentSettingsRequest] = None
+
+# In-memory settings storage (persists during runtime)
+_current_settings: Dict[str, Any] = {}
+
+@app.post("/settings", summary="Update agent settings including LLM provider and system prompt")
+async def update_settings(request: SettingsRequest):
+    """Update agent settings dynamically at runtime."""
+    global _current_settings
+    
+    try:
+        from server.llm_client import get_llm_client, OpenAICompatibleClient
+        import server.agent_config as agent_config
+        
+        llm = request.llm
+        
+        # Update LLM client
+        mgr = get_llm_client()
+        mgr.clients[llm.provider] = OpenAICompatibleClient(
+            api_key=llm.api_key,
+            base_url=llm.base_url,
+            model=llm.model,
+            provider=llm.provider
+        )
+        mgr.default_provider = llm.provider
+        
+        # Update agent config if provided
+        if request.agent:
+            ag = request.agent
+            if ag.name:
+                agent_config.AGENT_NAME = ag.name
+            if ag.system_prompt:
+                agent_config.SYSTEM_PROMPT = ag.system_prompt
+        
+        # Store settings
+        _current_settings = {
+            "llm": {
+                "provider": llm.provider,
+                "model": llm.model,
+                "base_url": llm.base_url,
+                "temperature": llm.temperature,
+                "max_tokens": llm.max_tokens,
+                "top_p": llm.top_p,
+            },
+            "agent": {
+                "name": request.agent.name if request.agent else agent_config.AGENT_NAME,
+                "max_iterations": request.agent.max_iterations if request.agent else 10,
+            }
+        }
+        
+        logger.info(f"Settings updated: provider={llm.provider}, model={llm.model}")
+        return {"success": True, "message": f"Settings updated: {llm.provider}/{llm.model}"}
+    
+    except Exception as e:
+        logger.error(f"Error updating settings: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/settings", summary="Get current agent settings")
+async def get_settings():
+    """Get current agent settings."""
+    from server.llm_client import get_llm_client
+    import server.agent_config as agent_config
+    
+    mgr = get_llm_client()
+    return {
+        "llm": {
+            "provider": mgr.default_provider,
+            "available_providers": list(mgr.clients.keys()),
+        },
+        "agent": {
+            "name": agent_config.AGENT_NAME,
+            "version": agent_config.AGENT_VERSION,
+        },
+        "custom": _current_settings
+    }
+
+@app.post("/settings/test", summary="Test LLM API connection")
+async def test_llm_connection(request: LLMSettingsRequest):
+    """Test if the provided LLM API key and settings are valid."""
+    try:
+        from openai import AsyncOpenAI
+        
+        client = AsyncOpenAI(
+            api_key=request.api_key,
+            base_url=request.base_url
+        )
+        
+        response = await client.chat.completions.create(
+            model=request.model,
+            messages=[{"role": "user", "content": "Say 'OK' in one word."}],
+            max_tokens=10,
+            temperature=0.1
+        )
+        
+        reply = response.choices[0].message.content
+        return {
+            "success": True,
+            "message": f"Connected to {request.provider}/{request.model}. Response: {reply}",
+            "provider": request.provider,
+            "model": request.model
+        }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "provider": request.provider
+        }
 
 @app.get("/security/summary", summary="Get security audit summary")
 async def get_security_summary():

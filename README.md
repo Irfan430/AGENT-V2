@@ -1,20 +1,23 @@
-# 🤖 Manus Agent Pro - Autonomous AI Agent System
+# AGENT-V2: Your Personal Autonomous AI Agent
 
-> **A powerful, autonomous AI agent that thinks, acts, and learns from its actions, now with enhanced personality and robust tool execution.**
->
-> Built with DeepSeek-V3 API, LangGraph orchestration, and a comprehensive toolset for real-world task execution, designed for personal use and local deployment.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+**AGENT-V2** is a powerful, autonomous AI agent designed for complex task execution. It features a robust architecture with a React-based frontend and a Python backend, supporting dynamic configuration of multiple LLM providers, real-time monitoring, and a comprehensive set of tools for web browsing, file system operations, and more.
+
+This version introduces a user-friendly settings interface, allowing you to configure system prompts and switch between LLM APIs like DeepSeek, OpenAI, and Gemini on the fly.
 
 ---
 
-## 🎯 Overview
+## ✨ Key Features
 
-Manus Agent Pro is a sophisticated autonomous AI agent system designed to:
-
-- **Think Autonomously**: Employs a Thought-Action-Observation-Reflection (TAOR) workflow for complex problem-solving.
-- **Act Intelligently**: Utilizes a comprehensive toolset for OS interaction, web browsing, and GitHub management.
-- **Learn Continuously**: Integrates long-term memory with ChromaDB for context and learning.
-- **Self-Correct**: Features advanced error detection and self-correction mechanisms to ensure task completion.
-- **Communicate Effectively**: Designed with a professional, helpful, and proactive personality.
+- **Multi-LLM Support**: Dynamically switch between different LLM providers (DeepSeek, OpenAI, Gemini, custom OpenAI-compatible APIs) through the UI.
+- **Customizable Agent Personality**: Modify the agent's behavior and personality by editing the system prompt directly in the settings.
+- **Real-time Chat Interface**: A sleek and responsive chat UI built with React, Vite, and TailwindCSS, featuring real-time message streaming.
+- **Agent Dashboard**: A dedicated dashboard to monitor agent performance, tool usage, and memory statistics.
+- **Comprehensive Toolset**: Includes tools for web browsing, file operations, shell command execution, and GitHub integration.
+- **Long-term Memory**: Utilizes ChromaDB for long-term memory storage and retrieval, enabling context-aware conversations.
+- **Easy Setup & Configuration**: Simplified setup with a single `.env` file and a new `requirements.txt` for Python dependencies.
+- **Cross-Platform Compatibility**: Designed to run on Linux, macOS, and Windows.
 
 ### Key Capabilities (Excluding Image and Video Features)
 ✅ Natural language understanding and response generation
@@ -30,17 +33,12 @@ Manus Agent Pro is a sophisticated autonomous AI agent system designed to:
 
 ---
 
-## 🧠 Agent Personality and System Prompt
+## 🏗️ Architecture
 
-The agent's core behavior and personality are defined in its system prompt, ensuring a consistent and effective interaction style. The agent is configured to be:
+The project is divided into two main components:
 
-- **Professional, efficient, and helpful.**
-- **Confident yet humble** in its communication.
-- Provides **concise but comprehensive answers.**
-- **Explains the logic** behind technical choices.
-- Maintains a **supportive and proactive attitude.**
-
-This personality is embedded in the `SYSTEM_PROMPT` within `server/agent_config.py`.
+1.  **Client (Frontend)**: A React application built with Vite, providing the user interface for chat, dashboard, and settings.
+2.  **Server (Backend)**: A Python application using FastAPI, which runs the agent logic, manages tools, and communicates with the LLM.
 
 ---
 
@@ -95,62 +93,102 @@ User Output
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Getting Started
 
 ### Prerequisites
-- Python 3.11+
-- Node.js 22+
-- DeepSeek API Key (get from [platform.deepseek.com](https://platform.deepseek.com))
+
+Make sure you have the following installed:
+
+- **Node.js** (v18 or higher) and **pnpm**
+- **Python** (v3.10 or higher) and **pip**
+- **Git**
 
 ### Installation
 
-```bash
-# Clone repository
-git clone https://github.com/Irfan430/AGENT-V2.git
-cd AGENT-V2
+1.  **Clone the repository:**
 
-# Setup backend
-cp .env.example .env
-# Edit .env and add your DeepSeek API key
+    ```bash
+    git clone https://github.com/Irfan430/AGENT-V2.git
+    cd AGENT-V2
+    ```
 
-sudo pip3 install -r requirements.txt # Note: requirements.txt is generated from main.py imports
+2.  **Install frontend dependencies:**
 
-# Setup frontend (if applicable, though current focus is on backend agent functionality)
-# cd client
-# pnpm install
-# cd ..
-```
+    ```bash
+    pnpm install
+    ```
 
-### Running Locally
+3.  **Install backend dependencies:**
 
-To run the agent's backend server:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-```bash
-# Ensure your LLM_API_KEY is set in the .env file or as an environment variable
-export PYTHONPATH=$PYTHONPATH:$(pwd) # Add current directory to Python path
-python3 server/main.py
-```
+4.  **Install Playwright browsers:**
+    The web browsing tool requires Playwright browsers. Install them with:
 
-This will start the FastAPI backend, typically accessible at `http://0.0.0.0:8000`. You can then interact with the agent via its API endpoints (e.g., `/agent/chat`).
+    ```bash
+    playwright install
+    ```
+
+### Configuration
+
+1.  **Create a `.env` file** in the root of the project by copying the example:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+2.  **Add your LLM API Key:**
+    Open the `.env` file and add your API key for the desired provider. By default, it's configured for DeepSeek.
+
+    ```env
+    # DeepSeek API (Default)
+    DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    LLM_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    ```
+
+    You can also configure other providers by uncommenting and adding the respective keys.
+
+## Running the Application
+
+You need to run the backend server and the frontend client in two separate terminals.
+
+1.  **Start the Python Backend:**
+
+    ```bash
+    python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8001 --reload
+    ```
+
+    The server will start on `http://localhost:8001`.
+
+2.  **Start the React Frontend:**
+
+    ```bash
+    pnpm dev
+    ```
+
+    The client will be available at `http://localhost:5173` (or another port if 5173 is busy).
+
+### Using the Application
+
+-   **Chat**: Open your browser to `http://localhost:5173/chat` to start interacting with the agent.
+-   **Settings**: Navigate to `http://localhost:5173/settings` to configure the LLM provider, API key, and agent's system prompt.
+-   **Dashboard**: Visit `http://localhost:5173/dashboard` to monitor the agent's activity.
 
 ---
 
-## ✅ Verification and Testing
+## 🐳 Docker
 
-To verify the agent's core functionality, personality, and coding capabilities, you can run the provided test script:
+For a more isolated setup, you can use Docker:
 
-```bash
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-python3 test_agent_v2.py
-```
+1.  **Build and run the services:**
 
-This script simulates various tasks and checks the agent's responses. The tests cover:
+    ```bash
+    docker-compose up --build
+    ```
 
-1.  **Personality Test**: Verifies the agent's introduction and adherence to its defined personality.
-2.  **Coding Task**: Assesses the agent's ability to write, save, and execute Python code (e.g., Fibonacci sequence).
-3.  **File Operations**: Confirms the agent can read content from previously created files.
-4.  **Research & Analysis**: Tests the agent's ability to perform web searches and synthesize information.
-5.  **Logic & Reasoning**: Evaluates the agent's capacity to solve classic logic puzzles.
+2.  The application will be accessible at `http://localhost:5173`.
 
 ### Recent Improvements and Bug Fixes
 
@@ -159,58 +197,15 @@ This script simulates various tasks and checks the agent's responses. The tests 
 
 ---
 
-## ⚙️ Configuration
+## 🤝 Contributing
 
-### Environment Variables
-
-Create a `.env` file in the root directory of the project:
-
-```bash
-# LLM Configuration
-LLM_API_KEY=sk-your-deepseek-api-key
-LLM_MODEL=deepseek-chat
-LLM_BASE_URL=https://api.deepseek.com/v1
-
-# Agent Configuration
-AGENT_NAME="Manus Agent Pro"
-AGENT_VERSION="1.0.0"
-MAX_ITERATIONS=10
-
-# Database
-CHROMA_DB_PATH=./chroma_db
-
-# Security
-# WORKSPACE_ROOT=./workspace # Uncomment and configure if strict workspace isolation is needed
-
-# Server
-HOST=0.0.0.0
-PORT=8000
-```
+Contributions are welcome! Please feel free to submit a pull request or open an issue.
 
 ---
 
-## 🛠️ Available Tools
+## 📝 License
 
-### File System Tools
-- `execute_command` - Run shell commands
-- `read_file` - Read file contents
-- `write_file` - Create/write files
-- `list_directory` - List directory contents
-- `delete_file` - Delete files
-
-### GitHub Tools
-- `git_clone` - Clone repositories
-- `git_commit` - Commit changes
-- `git_push` - Push to remote
-
-### Web Tools
-- `web_search` - Search the web for information
-- `navigate_web` - Browse websites with Playwright (human-like interaction, extract content, fill forms, take screenshots)
-
-### System Tools
-- `schedule_task` - Schedule recurring tasks
-- `execute_parallel` - Run tasks in parallel
-- `get_system_info` - System resource monitoring
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
 

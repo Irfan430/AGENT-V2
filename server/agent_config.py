@@ -123,7 +123,7 @@ class SecurityConfig:
     """Configuration for security and sandboxing."""
     
     # Approval gates for high-risk operations
-    require_approval_for: [
+    require_approval_for: list = [
         "delete_file",
         "execute_command",  # Only for dangerous commands
         "create_repo",

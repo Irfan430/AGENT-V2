@@ -2,6 +2,15 @@
 **/node_modules
 .pnpm-store/
 
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ChromaDB data
+chroma_db/
+
 # Build outputs
 dist/
 build/
