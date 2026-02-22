@@ -5,9 +5,9 @@ Combines memory retrieval with LLM generation for better answers.
 
 import logging
 from typing import Optional, List, Dict, Any
-from memory_manager_advanced import get_memory_manager
-from llm_client import get_llm_client, Message
-from agent_config import get_system_prompt
+from server.memory_manager_advanced import get_memory_manager
+from server.llm_client import get_llm_client, Message
+from server.agent_config import get_system_prompt
 
 logger = logging.getLogger(__name__)
 

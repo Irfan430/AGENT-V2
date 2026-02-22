@@ -8,14 +8,14 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
 
-from agent_state import (
+from server.agent_state import (
     AgentState, Thought, Action, Observation, Reflection,
     ActionType, create_initial_state, update_state_with_thought,
     update_state_with_action, update_state_with_observation,
     update_state_with_reflection, increment_iteration
 )
-from llm_client import get_llm_client, Message
-from agent_config import get_system_prompt, AgentStateConfig
+from server.llm_client import get_llm_client, Message
+from server.agent_config import get_system_prompt, AgentStateConfig
 
 logger = logging.getLogger(__name__)
 

@@ -13,17 +13,17 @@ from pydantic import BaseModel
 from typing import Optional, List
 import uvicorn
 
-from agent_config import (
+from server.agent_config import (
     AGENT_NAME,
     AGENT_VERSION,
     AGENT_DESCRIPTION,
     get_system_prompt
 )
-from llm_client import initialize_llm_client, get_llm_client, Message
-from agent_state import AgentState, ConversationHistory, create_initial_state
-from memory_manager import MemoryManager
-from agent_orchestrator import get_orchestrator
-from tool_manager import get_tool_manager
+from server.llm_client import initialize_llm_client, get_llm_client, Message
+from server.agent_state import AgentState, ConversationHistory, create_initial_state
+from server.memory_manager import MemoryManager
+from server.agent_orchestrator import get_orchestrator
+from server.tool_manager import get_tool_manager
 import uuid
 
 # Configure logging
@@ -212,7 +212,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks):
             conversation_id=conversation_id,
             response=response_text,
             thinking=agent_state.thought.reasoning if agent_state.thought else None,
-            actions_taken=[action.description or str(action.type) for action in agent_state.actions],
+            actions_taken=[getattr(action, 'description', str(action.type)) for action in agent_state.actions],
             success=agent_state.success
         )
     

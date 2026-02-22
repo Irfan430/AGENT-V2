@@ -40,6 +40,7 @@ class Thought(BaseModel):
 class Action(BaseModel):
     """An action taken by the agent."""
     type: ActionType
+    description: Optional[str] = None
     tool_call: Optional[ToolCall] = None
     timestamp: datetime = field(default_factory=datetime.now)
 
