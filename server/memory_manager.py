@@ -20,10 +20,15 @@ class MemoryManager:
     Handles conversation persistence, semantic search, and memory compression.
     """
     
-    def __init__(self, db_path: str = "/home/ubuntu/AGENT-V2/chroma_db"):
+    def __init__(self, db_path: str = None):
         """
         Initialize the memory manager.
         """
+        if db_path is None:
+            # Use a relative path to the current project directory
+            current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            db_path = os.path.join(current_dir, "chroma_db")
+        
         self.db_path = db_path
         os.makedirs(db_path, exist_ok=True)
         

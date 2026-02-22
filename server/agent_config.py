@@ -132,8 +132,8 @@ class SecurityConfig:
     ]
     
     # Workspace isolation
-    workspace_root: str = "/home/ubuntu/agent_workspace"
-    allow_outside_workspace: bool = False
+    workspace_root: str = "./agent_workspace"
+    allow_outside_workspace: bool = True
     
     # Resource limits
     max_memory_usage: int = 2 * 1024 * 1024 * 1024  # 2GB

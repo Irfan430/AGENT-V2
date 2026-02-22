@@ -17,7 +17,10 @@ class GitHubTools:
     Advanced Git and GitHub operations.
     """
     
-    def __init__(self, base_path: str = "/home/ubuntu"):
+    def __init__(self, base_path: str = None):
+        if base_path is None:
+            # Use current working directory as base path
+            base_path = os.getcwd()
         self.base_path = Path(base_path).resolve()
         logger.info(f"GitHubTools initialized with base path: {self.base_path}")
 

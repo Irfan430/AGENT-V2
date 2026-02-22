@@ -20,14 +20,19 @@ class FileSystemTools:
     Advanced file system operations with safety and reliability.
     """
     
-    def __init__(self, base_path: str = "/home/ubuntu"):
+    def __init__(self, base_path: str = None):
+        if base_path is None:
+            # Use current working directory as base path
+            base_path = os.getcwd()
         self.base_path = Path(base_path).resolve()
         logger.info(f"FileSystemTools initialized with base path: {self.base_path}")
 
     def _validate_path(self, path: Union[str, Path]) -> Path:
         """Ensure the path is within the allowed base directory."""
+        if path is None:
+            return self.base_path
         resolved_path = Path(path).resolve()
-        # For this personal agent, we allow access to /home/ubuntu and /tmp
+        # For this personal agent, we allow access to the base path and /tmp
         allowed_prefixes = [self.base_path, Path("/tmp").resolve()]
         
         is_allowed = any(str(resolved_path).startswith(str(prefix)) for prefix in allowed_prefixes)
